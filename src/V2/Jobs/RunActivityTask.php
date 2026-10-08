@@ -38,7 +38,11 @@ final class RunActivityTask implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
+    public const DEFERRED_BY_MIDDLEWARE = 'Activity middleware deferred the task.';
+
     public int $tries = 1;
+
+    private ?Throwable $constructionError = null;
 
     public function __construct(
         public readonly string $taskId,
@@ -53,37 +57,58 @@ final class RunActivityTask implements ShouldQueue
             is_string($this->queue ?? null) ? $this->queue : null,
         );
 
-        (new Pipeline(Container::getInstance()))
-            ->send($this)
-            ->through($this->activityMiddleware())
-            ->then(fn () => $this->claimAndRun());
+        $claimEntered = false;
+
+        try {
+            (new Pipeline(Container::getInstance()))
+                ->send($this)
+                ->through($this->activityMiddleware())
+                ->then(function () use (&$claimEntered): void {
+                    $claimEntered = true;
+                    $this->claimAndRun();
+                });
+        } catch (Throwable $error) {
+            if ($claimEntered) {
+                throw $error;
+            }
+
+            // Failing the queue job here would leave the task ready for repair to
+            // redeliver forever, so an error from the activity's own middleware is
+            // charged to an attempt like an error from handle().
+            $this->claimAndRun($error);
+        }
     }
 
     /**
      * Activity middleware calls this to decline the task. Releasing the queue
      * message would spend this job's single transport try, so the durable task
-     * is deferred and redelivered instead, leaving its attempt count untouched.
+     * is deferred instead, leaving its attempt count untouched.
+     *
+     * The deferral is recorded as a claim failure whose repair backoff ends
+     * when the task is due, so the repair pass is the only redelivery path.
+     * Redispatching from here as well would race repair's overdue check and
+     * start a second delivery chain on every lap the resource stays held.
      *
      * @param DateTimeInterface|DateInterval|int $delay
      */
     public function release($delay = 0): void
     {
-        $deferred = WorkflowTask::query()
+        $now = now();
+        $availableAt = $now->copy()
+            ->addSeconds($this->secondsUntil($delay));
+
+        WorkflowTask::query()
             ->whereKey($this->taskId)
             ->where('status', TaskStatus::Ready->value)
             ->update([
-                'available_at' => now()
-                    ->addSeconds($this->secondsUntil($delay)),
+                'available_at' => $availableAt,
+                'last_claim_failed_at' => $now,
+                'last_claim_error' => self::DEFERRED_BY_MIDDLEWARE,
+                'repair_available_at' => $availableAt,
             ]);
-
-        $task = $deferred === 1 ? WorkflowTask::query()->find($this->taskId) : null;
-
-        if ($task instanceof WorkflowTask) {
-            TaskDispatcher::dispatch($task);
-        }
     }
 
-    private function claimAndRun(): void
+    private function claimAndRun(?Throwable $preClaimError = null): void
     {
         [$claim, $releaseIn] = $this->claimTask();
 
@@ -108,6 +133,24 @@ final class RunActivityTask implements ShouldQueue
         /** @var ActivityExecution $execution */
         $execution = $claim->execution;
         $execution->setRelation('run', $claim->run);
+
+        if ($this->constructionError !== null) {
+            throw $this->constructionError;
+        }
+
+        if ($preClaimError !== null) {
+            $this->recordOutcome(
+                $execution,
+                $attemptId,
+                $attemptCount,
+                null,
+                $preClaimError,
+                ActivityRetryPolicy::maxAttemptsFromSnapshot($execution),
+                ActivityRetryPolicy::backoffSecondsFromSnapshot($execution, $attemptCount),
+            );
+
+            return;
+        }
 
         $activityClass = TypeRegistry::resolveActivityClass($execution->activity_class, $execution->activity_type);
         $activity = RuntimeObjectFactory::activity($activityClass, $execution, $execution->run, $this->taskId);
@@ -148,6 +191,18 @@ final class RunActivityTask implements ShouldQueue
         $maxAttempts = ActivityRetryPolicy::maxAttempts($execution, $activity);
         $backoffSeconds = ActivityRetryPolicy::backoffSeconds($execution, $activity, $attemptCount);
 
+        $this->recordOutcome($execution, $attemptId, $attemptCount, $result, $throwable, $maxAttempts, $backoffSeconds);
+    }
+
+    private function recordOutcome(
+        ActivityExecution $execution,
+        string $attemptId,
+        int $attemptCount,
+        mixed $result,
+        ?Throwable $throwable,
+        int $maxAttempts,
+        int $backoffSeconds,
+    ): void {
         $outcome = ActivityOutcomeRecorder::record(
             $this->taskId,
             $attemptId,
@@ -191,13 +246,16 @@ final class RunActivityTask implements ShouldQueue
 
         try {
             $activityClass = TypeRegistry::resolveActivityClass($execution->activity_class, $execution->activity_type);
-        } catch (Throwable) {
-            // The claimed path reports unresolvable activities against the attempt.
+            $activity = RuntimeObjectFactory::activity($activityClass, $execution, $execution->run, $this->taskId);
+        } catch (Throwable $error) {
+            // Building the activity is infrastructure, not activity code: after the
+            // claim it fails the transport, not an attempt. Keep that by claiming first.
+            $this->constructionError = $error;
+
             return [];
         }
 
-        return RuntimeObjectFactory::activity($activityClass, $execution, $execution->run, $this->taskId)
-            ->middleware();
+        return $activity->middleware();
     }
 
     /**

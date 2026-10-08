@@ -20,6 +20,11 @@ final class TestOverlappingActivity extends Activity
 
     public static ?Closure $during = null;
 
+    /**
+     * 'middleware' throws from middleware(); 'handle' throws from the middleware itself.
+     */
+    public static ?string $middlewareFails = null;
+
     public function handle(string $resource, string $caller, bool $fail = false): string
     {
         self::$calls[] = $caller;
@@ -37,6 +42,18 @@ final class TestOverlappingActivity extends Activity
 
     public function middleware(): array
     {
+        if (self::$middlewareFails === 'middleware') {
+            throw new RuntimeException('Lock key could not be built.');
+        }
+
+        if (self::$middlewareFails === 'handle') {
+            return [
+                static function (): never {
+                    throw new RuntimeException('Lock store unavailable.');
+                },
+            ];
+        }
+
         [$resource] = $this->execution->activityArguments();
 
         return [(new WithoutOverlapping($resource, self::RELEASE_AFTER, 60))->shared()];
