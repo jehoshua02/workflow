@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Let V2 activities declare queue job `middleware()`, run around the claim of
+  the activity's task. A middleware that declines the task with `release()`,
+  such as Laravel's `WithoutOverlapping` when its lock is held, now defers the
+  durable task and redelivers it instead of claiming it: no attempt is spent,
+  no history is recorded, and the activity does not run. A lock taken by the
+  middleware is held until the attempt's outcome is recorded. Middleware runs
+  only for queue-dispatched tasks, not for poll-mode or external workers.
+  Activities without middleware are unchanged.
 - Check for the engine's tables on the configured `workflows.storage.connection`
   instead of the application's default connection when gating the V2 task
   watchdog, worker-compatibility heartbeats, and the v1 watchdog. With a

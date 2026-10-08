@@ -4,12 +4,18 @@ declare(strict_types=1);
 
 namespace Workflow\V2\Jobs;
 
+use DateInterval;
+use DateTimeInterface;
 use Illuminate\Bus\Queueable;
+use Illuminate\Container\Container;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Pipeline\Pipeline;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\InteractsWithTime;
 use Throwable;
+use Workflow\V2\Enums\TaskStatus;
 use Workflow\V2\Models\ActivityExecution;
 use Workflow\V2\Models\WorkflowTask;
 use Workflow\V2\Support\ActivityOutcomeRecorder;
@@ -28,6 +34,7 @@ final class RunActivityTask implements ShouldQueue
 {
     use Dispatchable;
     use InteractsWithQueue;
+    use InteractsWithTime;
     use Queueable;
     use SerializesModels;
 
@@ -46,6 +53,38 @@ final class RunActivityTask implements ShouldQueue
             is_string($this->queue ?? null) ? $this->queue : null,
         );
 
+        (new Pipeline(Container::getInstance()))
+            ->send($this)
+            ->through($this->activityMiddleware())
+            ->then(fn () => $this->claimAndRun());
+    }
+
+    /**
+     * Activity middleware calls this to decline the task. Releasing the queue
+     * message would spend this job's single transport try, so the durable task
+     * is deferred and redelivered instead, leaving its attempt count untouched.
+     *
+     * @param DateTimeInterface|DateInterval|int $delay
+     */
+    public function release($delay = 0): void
+    {
+        $deferred = WorkflowTask::query()
+            ->whereKey($this->taskId)
+            ->where('status', TaskStatus::Ready->value)
+            ->update([
+                'available_at' => now()
+                    ->addSeconds($this->secondsUntil($delay)),
+            ]);
+
+        $task = $deferred === 1 ? WorkflowTask::query()->find($this->taskId) : null;
+
+        if ($task instanceof WorkflowTask) {
+            TaskDispatcher::dispatch($task);
+        }
+    }
+
+    private function claimAndRun(): void
+    {
         [$claim, $releaseIn] = $this->claimTask();
 
         if ($releaseIn !== null) {
@@ -124,6 +163,41 @@ final class RunActivityTask implements ShouldQueue
         if ($nextTask instanceof WorkflowTask) {
             TaskDispatcher::dispatch($nextTask);
         }
+    }
+
+    /**
+     * @return list<object>
+     */
+    private function activityMiddleware(): array
+    {
+        $task = WorkflowTask::query()->find($this->taskId);
+
+        if (! $task instanceof WorkflowTask
+            || $task->status !== TaskStatus::Ready
+            || ($task->available_at !== null && $task->available_at->isFuture())) {
+            return [];
+        }
+
+        $executionId = $task->payload['activity_execution_id'] ?? null;
+        $execution = is_string($executionId)
+            ? ActivityExecution::query()->with('run')->find($executionId)
+            : null;
+
+        if (! $execution instanceof ActivityExecution
+            || $execution->run === null
+            || WorkflowStub::hasMock($execution->activity_class)) {
+            return [];
+        }
+
+        try {
+            $activityClass = TypeRegistry::resolveActivityClass($execution->activity_class, $execution->activity_type);
+        } catch (Throwable) {
+            // The claimed path reports unresolvable activities against the attempt.
+            return [];
+        }
+
+        return RuntimeObjectFactory::activity($activityClass, $execution, $execution->run, $this->taskId)
+            ->middleware();
     }
 
     /**

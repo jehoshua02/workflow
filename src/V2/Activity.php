@@ -104,6 +104,20 @@ abstract class Activity
     }
 
     /**
+     * Queue job middleware run around the claim of this activity's task, so a
+     * middleware that declines the task with release() defers it without
+     * spending an attempt or recording any history.
+     *
+     * The runtime context and arguments are bound when this is called.
+     *
+     * @return list<object>
+     */
+    public function middleware(): array
+    {
+        return [];
+    }
+
+    /**
      * @param array<string, mixed> $progress
      */
     public function heartbeat(array $progress = []): void
