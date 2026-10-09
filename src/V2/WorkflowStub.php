@@ -8,7 +8,6 @@ use BadMethodCallException;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\App;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Illuminate\Support\Testing\Fakes\QueueFake;
@@ -73,6 +72,7 @@ use Workflow\V2\Support\SelectedRunLocator;
 use Workflow\V2\Support\ServiceCallCancellationOrigin;
 use Workflow\V2\Support\ServiceOperationCancellation;
 use Workflow\V2\Support\SignalWaits;
+use Workflow\V2\Support\StorageConnection;
 use Workflow\V2\Support\StructuralLimits;
 use Workflow\V2\Support\TaskDispatcher;
 use Workflow\V2\Support\TaskRepair;
@@ -946,7 +946,13 @@ final class WorkflowStub
         $task = null;
         $startedRun = null;
 
-        DB::transaction(function () use ($metadata, $startOptions, &$task, &$command, &$startedRun): void {
+        StorageConnection::transaction(function () use (
+            $metadata,
+            $startOptions,
+            &$task,
+            &$command,
+            &$startedRun
+        ): void {
             $task = null;
             $command = null;
             $startedRun = null;
@@ -1528,7 +1534,7 @@ final class WorkflowStub
         $command = null;
         $task = null;
 
-        DB::transaction(function () use (&$command, &$task): void {
+        StorageConnection::transaction(function () use (&$command, &$task): void {
             /** @var WorkflowInstance $instance */
             $instance = self::instanceQuery()
                 ->lockForUpdate()
@@ -1801,7 +1807,7 @@ final class WorkflowStub
         /** @var WorkflowCommand|null $command */
         $command = null;
 
-        DB::transaction(function () use (&$command, $reason): void {
+        StorageConnection::transaction(function () use (&$command, $reason): void {
             /** @var WorkflowInstance $instance */
             $instance = self::instanceQuery()
                 ->lockForUpdate()
@@ -1920,7 +1926,7 @@ final class WorkflowStub
         $command = null;
         $task = null;
 
-        DB::transaction(function () use (
+        StorageConnection::transaction(function () use (
             &$command,
             &$task,
             $reason,
@@ -2286,7 +2292,7 @@ final class WorkflowStub
         /** @var WorkflowTask|null $resumeTask */
         $resumeTask = null;
 
-        DB::transaction(function () use ($method, $arguments, &$command, &$update, &$resumeTask): void {
+        StorageConnection::transaction(function () use ($method, $arguments, &$command, &$update, &$resumeTask): void {
             /** @var WorkflowInstance $instance */
             $instance = self::instanceQuery()
                 ->lockForUpdate()
@@ -2723,7 +2729,7 @@ final class WorkflowStub
         $command = null;
         $task = null;
 
-        DB::transaction(function () use (
+        StorageConnection::transaction(function () use (
             $name,
             $arguments,
             $payloadCodec,
@@ -3025,7 +3031,7 @@ final class WorkflowStub
         $startedRun = null;
         $intakeGroupId = (string) Str::ulid();
 
-        DB::transaction(function () use (
+        StorageConnection::transaction(function () use (
             $name,
             $signalArguments,
             $startArguments,
@@ -3500,7 +3506,7 @@ final class WorkflowStub
         $command = null;
         $parentTasks = [];
 
-        DB::transaction(function () use (
+        StorageConnection::transaction(function () use (
             &$command,
             &$parentTasks,
             $commandType,

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Workflow\V2\Support;
 
 use Carbon\CarbonInterface;
-use Illuminate\Support\Facades\DB;
 use Throwable;
 use Workflow\V2\Contracts\HistoryProjectionRole;
 use Workflow\V2\Enums\ActivityAttemptStatus;
@@ -86,7 +85,7 @@ final class ActivityTimeoutEnforcer
     public static function enforce(string $executionId): array
     {
         try {
-            return DB::transaction(static function () use ($executionId): array {
+            return StorageConnection::transaction(static function () use ($executionId): array {
                 $lockedRows = ActivityRowLockOrder::lockForExecution($executionId);
                 $attempt = $lockedRows['attempt'];
                 $execution = $lockedRows['execution'];

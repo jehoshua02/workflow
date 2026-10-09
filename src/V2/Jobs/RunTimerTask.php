@@ -9,7 +9,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Workflow\V2\Contracts\HistoryProjectionRole;
 use Workflow\V2\Enums\HistoryEventType;
 use Workflow\V2\Enums\RunStatus;
@@ -21,6 +20,7 @@ use Workflow\V2\Models\WorkflowRun;
 use Workflow\V2\Models\WorkflowTask;
 use Workflow\V2\Models\WorkflowTimer;
 use Workflow\V2\Support\ParallelChildGroup;
+use Workflow\V2\Support\StorageConnection;
 use Workflow\V2\Support\TaskBackendCapabilities;
 use Workflow\V2\Support\TaskCompatibility;
 use Workflow\V2\Support\TaskDispatcher;
@@ -96,7 +96,7 @@ final class RunTimerTask implements ShouldQueue
             return;
         }
 
-        $resumeTask = DB::transaction(function () use ($timerId): ?WorkflowTask {
+        $resumeTask = StorageConnection::transaction(function () use ($timerId): ?WorkflowTask {
             /** @var WorkflowTask $task */
             $task = WorkflowTask::query()
                 ->lockForUpdate()
@@ -268,7 +268,7 @@ final class RunTimerTask implements ShouldQueue
      */
     private function claimTask(): array
     {
-        return DB::transaction(function (): array {
+        return StorageConnection::transaction(function (): array {
             /** @var WorkflowTask|null $task */
             $task = WorkflowTask::query()
                 ->lockForUpdate()
