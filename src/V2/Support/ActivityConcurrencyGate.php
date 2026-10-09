@@ -6,7 +6,6 @@ namespace Workflow\V2\Support;
 
 use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use ReflectionMethod;
 use Throwable;
 use Workflow\V2\Activity;
@@ -61,7 +60,7 @@ final class ActivityConcurrencyGate
 
         try {
             // A savepoint keeps user-code query errors from poisoning the claim transaction.
-            $key = DB::transaction(static function () use (
+            $key = StorageConnection::transaction(static function () use (
                 $activityClass,
                 $execution,
                 $run,

@@ -6,15 +6,18 @@ namespace Tests\Unit\V2;
 
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Events\TransactionBeginning;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Tests\Fixtures\V2\TestCommandTargetWorkflow;
+use Tests\Fixtures\V2\TestConcurrencyKeyActivity;
 use Tests\SchemaTestCase;
 use Throwable;
 use Workflow\Serializers\CodecRegistry;
 use Workflow\Serializers\Serializer;
+use Workflow\V2\ConcurrencyKey;
 use Workflow\V2\Enums\RunStatus;
 use Workflow\V2\Enums\TaskStatus;
 use Workflow\V2\Enums\TaskType;
@@ -34,6 +37,7 @@ final class StorageConnectionTransactionTest extends SchemaTestCase
 
     protected function tearDown(): void
     {
+        TestConcurrencyKeyActivity::$key = null;
         config()
             ->set('workflows.storage.connection', null);
 
@@ -156,6 +160,33 @@ final class StorageConnectionTransactionTest extends SchemaTestCase
         $this->assertNotNull($task->fresh()->last_dispatched_at);
     }
 
+    public function testConcurrencyGateEvaluatesTheKeyInsideTheClaimTransactionOnTheStorageConnection(): void
+    {
+        $default = (string) config('database.default');
+        $levelsAtKey = null;
+        TestConcurrencyKeyActivity::$key = static function () use (&$levelsAtKey, $default): ConcurrencyKey {
+            $levelsAtKey = [
+                'storage' => DB::connection('storage')->transactionLevel(),
+                'default' => DB::connection($default)->transactionLevel(),
+            ];
+
+            return new ConcurrencyKey('storage-gate-resource', 600, 5, 600);
+        };
+
+        $taskId = $this->createReadyActivityTask('storage-txn-gate', TestConcurrencyKeyActivity::class);
+
+        $result = ActivityTaskClaimer::claimDetailed($taskId, 'gate-worker');
+
+        $this->assertNotNull($result['claim'], (string) $result['reason']);
+        // 1 = the claim transaction, 2 = the gate's savepoint inside it.
+        $this->assertSame([
+            'storage' => 2,
+            'default' => 0,
+        ], $levelsAtKey);
+        $this->assertSame('storage-gate-resource', $result['claim']->concurrencyKey);
+        $this->assertFalse(Cache::lock('storage-gate-resource', 1)->get());
+    }
+
     protected function defineEnvironment($app): void
     {
         $this->storageDatabase = (string) tempnam(sys_get_temp_dir(), 'wf_storage_txn_');
@@ -180,15 +211,17 @@ final class StorageConnectionTransactionTest extends SchemaTestCase
             && str_contains($event->sql, 'workflow_tasks');
     }
 
-    private function createReadyActivityTask(string $instanceId): string
-    {
+    private function createReadyActivityTask(
+        string $instanceId,
+        string $activityClass = 'StorageConnectionActivity',
+    ): string {
         $run = $this->createRun($instanceId);
 
         ActivityExecution::query()->create([
             'id' => $instanceId . '-activity',
             'workflow_run_id' => $run->id,
             'sequence' => 1,
-            'activity_class' => 'StorageConnectionActivity',
+            'activity_class' => $activityClass,
             'activity_type' => 'storage.activity',
             'status' => 'pending',
             'arguments' => serialize([]),
