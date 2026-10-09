@@ -44,6 +44,9 @@ class WorkflowTask extends Model
         'last_dispatched_at' => 'datetime',
         'last_claim_failed_at' => 'datetime',
         'repair_available_at' => 'datetime',
+        'deferred_since' => 'datetime',
+        'deferral_deadline_at' => 'datetime',
+        'deferral_count' => 'integer',
     ];
 
     public function run(): BelongsTo

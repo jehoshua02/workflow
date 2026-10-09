@@ -1547,6 +1547,8 @@ final class WorkflowFiberRunner
             'ActivityScheduled',
             'ActivityStarted',
             'ActivityHeartbeatRecorded',
+            'ActivityDeferred',
+            'ActivityDeferralEnded',
             'ActivityRetryScheduled',
             'ActivityCompleted',
             'ActivityFailed',
@@ -1655,6 +1657,8 @@ final class WorkflowFiberRunner
                 'ActivityScheduled',
                 'ActivityStarted',
                 'ActivityHeartbeatRecorded',
+                'ActivityDeferred',
+                'ActivityDeferralEnded',
                 'ActivityRetryScheduled',
             ], true)) {
                 continue;
@@ -1736,6 +1740,8 @@ final class WorkflowFiberRunner
             'ActivityScheduled',
             'ActivityStarted',
             'ActivityHeartbeatRecorded',
+            'ActivityDeferred',
+            'ActivityDeferralEnded',
             'ActivityRetryScheduled',
             'ActivityCompleted',
             'ActivityFailed',

@@ -40,6 +40,8 @@ enum HistoryEventType: string
     case ArchiveRequested = 'ArchiveRequested';
     case WorkflowArchived = 'WorkflowArchived';
     case ActivityScheduled = 'ActivityScheduled';
+    case ActivityDeferred = 'ActivityDeferred';
+    case ActivityDeferralEnded = 'ActivityDeferralEnded';
     case ActivityStarted = 'ActivityStarted';
     case ActivityHeartbeatRecorded = 'ActivityHeartbeatRecorded';
     case ActivityRetryScheduled = 'ActivityRetryScheduled';

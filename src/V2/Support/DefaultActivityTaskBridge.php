@@ -226,9 +226,9 @@ final class DefaultActivityTaskBridge implements ActivityTaskBridge
 
     public function complete(string $attemptId, mixed $result, ?string $codec = null): array
     {
-        $outcome = $this->dispatchingOutcome(
-            ActivityOutcomeRecorder::recordForAttempt($attemptId, $result, null, $codec)
-        );
+        $recorded = ActivityOutcomeRecorder::recordForAttempt($attemptId, $result, null, $codec);
+        ActivityConcurrencyGate::releaseForAttempt($attemptId);
+        $outcome = $this->dispatchingOutcome($recorded);
 
         return [
             'recorded' => $outcome['recorded'],
@@ -240,9 +240,9 @@ final class DefaultActivityTaskBridge implements ActivityTaskBridge
 
     public function fail(string $attemptId, Throwable|array|string $failure, ?string $codec = null): array
     {
-        $outcome = $this->dispatchingOutcome(
-            ActivityOutcomeRecorder::recordForAttempt($attemptId, null, self::throwable($failure), $codec)
-        );
+        $recorded = ActivityOutcomeRecorder::recordForAttempt($attemptId, null, self::throwable($failure), $codec);
+        ActivityConcurrencyGate::releaseForAttempt($attemptId);
+        $outcome = $this->dispatchingOutcome($recorded);
 
         return [
             'recorded' => $outcome['recorded'],

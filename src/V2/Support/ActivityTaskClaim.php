@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Workflow\V2\Support;
 
+use Workflow\V2\Activity;
 use Workflow\V2\Models\ActivityAttempt;
 use Workflow\V2\Models\ActivityExecution;
 use Workflow\V2\Models\WorkflowRun;
@@ -16,6 +17,9 @@ final class ActivityTaskClaim
         public readonly WorkflowRun $run,
         public readonly ActivityExecution $execution,
         public readonly ActivityAttempt $attempt,
+        public readonly ?Activity $activity = null,
+        public readonly ?string $concurrencyKey = null,
+        public readonly ?string $concurrencyLockOwner = null,
     ) {
     }
 
@@ -32,5 +36,10 @@ final class ActivityTaskClaim
     public function attemptNumber(): int
     {
         return max(1, (int) $this->attempt->attempt_number);
+    }
+
+    public function releaseConcurrencyLock(): void
+    {
+        ActivityConcurrencyGate::release($this->concurrencyKey, $this->concurrencyLockOwner);
     }
 }

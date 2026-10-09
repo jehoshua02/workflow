@@ -249,6 +249,8 @@ final class HistoryTimeline
             HistoryEventType::ActivityScheduled,
             HistoryEventType::ActivityStarted,
             HistoryEventType::ActivityHeartbeatRecorded,
+            HistoryEventType::ActivityDeferred,
+            HistoryEventType::ActivityDeferralEnded,
             HistoryEventType::ActivityRetryScheduled,
             HistoryEventType::ActivityCompleted,
             HistoryEventType::ActivityFailed,
@@ -407,6 +409,18 @@ final class HistoryTimeline
             HistoryEventType::ActivityScheduled => sprintf('Scheduled %s.', $activityLabel),
             HistoryEventType::ActivityStarted => sprintf('Started %s.', $activityLabel),
             HistoryEventType::ActivityHeartbeatRecorded => sprintf('Recorded heartbeat for %s.', $activityLabel),
+            HistoryEventType::ActivityDeferred => sprintf(
+                'Waiting on %s for %s.',
+                self::stringValue($payload['concurrency_key'] ?? null) ?? 'a concurrency key',
+                $activityLabel,
+            ),
+            HistoryEventType::ActivityDeferralEnded => sprintf(
+                ($payload['outcome'] ?? null) === 'gave_up'
+                    ? 'Gave up waiting on %s for %s.'
+                    : 'Acquired %s for %s.',
+                self::stringValue($payload['concurrency_key'] ?? null) ?? 'a concurrency key',
+                $activityLabel,
+            ),
             HistoryEventType::ActivityRetryScheduled => sprintf(
                 'Scheduled retry %d for %s.',
                 (self::intValue($payload['retry_after_attempt'] ?? null) ?? 0) + 1,
@@ -794,6 +808,8 @@ final class HistoryTimeline
                     HistoryEventType::ActivityScheduled => 'pending',
                     HistoryEventType::ActivityStarted => 'running',
                     HistoryEventType::ActivityHeartbeatRecorded => 'running',
+                    HistoryEventType::ActivityDeferred,
+                    HistoryEventType::ActivityDeferralEnded => 'pending',
                     HistoryEventType::ActivityRetryScheduled => 'pending',
                     HistoryEventType::ActivityCompleted => 'completed',
                     HistoryEventType::ActivityFailed => 'failed',
@@ -1001,6 +1017,8 @@ final class HistoryTimeline
             HistoryEventType::ActivityScheduled,
             HistoryEventType::ActivityStarted,
             HistoryEventType::ActivityHeartbeatRecorded,
+            HistoryEventType::ActivityDeferred,
+            HistoryEventType::ActivityDeferralEnded,
             HistoryEventType::ActivityRetryScheduled,
             HistoryEventType::ActivityCompleted,
             HistoryEventType::ActivityFailed,
@@ -1113,6 +1131,8 @@ final class HistoryTimeline
         return match ($event->event_type) {
             HistoryEventType::ActivityStarted,
             HistoryEventType::ActivityHeartbeatRecorded,
+            HistoryEventType::ActivityDeferred,
+            HistoryEventType::ActivityDeferralEnded,
             HistoryEventType::ActivityRetryScheduled,
             HistoryEventType::ActivityCompleted,
             HistoryEventType::ActivityFailed,

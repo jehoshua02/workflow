@@ -224,6 +224,8 @@ final class RunActivityView
                 HistoryEventType::ActivityScheduled,
                 HistoryEventType::ActivityStarted,
                 HistoryEventType::ActivityHeartbeatRecorded,
+                HistoryEventType::ActivityDeferred,
+                HistoryEventType::ActivityDeferralEnded,
                 HistoryEventType::ActivityRetryScheduled,
                 HistoryEventType::ActivityCompleted,
                 HistoryEventType::ActivityFailed,

@@ -16,6 +16,7 @@ use Workflow\V2\Enums\HistoryEventType;
 use Workflow\V2\Enums\TaskStatus;
 use Workflow\V2\Enums\TaskType;
 use Workflow\V2\Exceptions\ActivityTimeoutException;
+use Workflow\V2\Exceptions\InvalidConcurrencyKeyException;
 use Workflow\V2\Exceptions\StructuralLimitExceededException;
 use Workflow\V2\Models\ActivityAttempt;
 use Workflow\V2\Models\ActivityExecution;
@@ -92,6 +93,14 @@ final class LocalActivityExecutor
             $throwable = $mocked['throwable'];
         } else {
             try {
+                if ($activity->concurrencyKey() !== null) {
+                    // Local activities run inside the workflow task and never pass the claim gate.
+                    throw new InvalidConcurrencyKeyException(sprintf(
+                        'Activity [%s] declares a concurrency key, which local activities cannot hold. Schedule it as a regular activity.',
+                        $execution->activity_class,
+                    ));
+                }
+
                 $result = $activity->{$entryMethod->getName()}(...$arguments);
             } catch (Throwable $error) {
                 $throwable = $error;

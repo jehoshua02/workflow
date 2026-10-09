@@ -851,6 +851,7 @@ final class RunSummaryProjector
                                         $now,
                                         $redispatchCutoff,
                                     ): void {
+                                        ActivityConcurrencyGate::applyNotWaiting($dispatchOverdue, $now);
                                         $dispatchOverdue
                                             ->where(static function ($available) use ($now): void {
                                                 $available->whereNull('available_at')
