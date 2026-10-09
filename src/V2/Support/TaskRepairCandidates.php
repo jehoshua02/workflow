@@ -604,7 +604,8 @@ final class TaskRepairCandidates
                                             });
                                     });
                                 })
-                                ->orWhere(static function ($dispatchOverdue) use ($staleDispatchCutoff): void {
+                                ->orWhere(static function ($dispatchOverdue) use ($now, $staleDispatchCutoff): void {
+                                    ActivityConcurrencyGate::applyNotWaiting($dispatchOverdue, $now);
                                     $dispatchOverdue
                                         ->where(static function ($dispatchHealthy): void {
                                             self::applyDispatchHealthy($dispatchHealthy);

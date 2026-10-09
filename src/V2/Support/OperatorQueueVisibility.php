@@ -423,6 +423,9 @@ final class OperatorQueueVisibility
             ->where(static function ($query) use ($taskTable): void {
                 $query->whereNull($taskTable . '.last_dispatch_error')
                     ->orWhere($taskTable . '.last_dispatch_error', '');
+            })
+            ->where(static function ($query) use ($now, $taskTable): void {
+                ActivityConcurrencyGate::applyNotWaiting($query, $now, $taskTable);
             });
 
         $dispatchOverdueCount = (clone $dispatchOverdueQuery)->count();

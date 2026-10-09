@@ -96,6 +96,18 @@ abstract class Activity
     }
 
     /**
+     * Declare a shared resource this activity must hold while it runs.
+     *
+     * The engine calls this before each claim, with the runtime context bound,
+     * so `$this->execution->activityArguments()` is available. Return null to
+     * run without a lock. An exception thrown here is charged to an attempt.
+     */
+    public function concurrencyKey(): ?ConcurrencyKey
+    {
+        return null;
+    }
+
+    /**
      * @return int|list<int>
      */
     public function backoff(): int|array

@@ -171,6 +171,10 @@ final class TaskRepairPolicy
             return false;
         }
 
+        if (ActivityConcurrencyGate::isWaiting($task, $now)) {
+            return false;
+        }
+
         $reference = $task->last_dispatched_at ?? $task->created_at;
 
         if ($reference === null) {
