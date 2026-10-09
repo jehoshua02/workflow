@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Workflow\V2\Support;
 
 use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
-use Illuminate\Support\Facades\DB;
 use Throwable;
 use Workflow\V2\Contracts\HistoryProjectionRole;
 use Workflow\V2\Enums\TaskStatus;
@@ -22,13 +21,7 @@ final class TaskDispatcher
 {
     public static function dispatch(WorkflowTask $task): void
     {
-        if (DB::transactionLevel() > 0) {
-            DB::afterCommit(static fn () => self::publish($task->id));
-
-            return;
-        }
-
-        self::publish($task->id);
+        StorageConnection::afterCommit(static fn () => self::publish($task->id));
     }
 
     private static function publish(string $taskId): void

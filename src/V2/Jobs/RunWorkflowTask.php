@@ -9,7 +9,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Throwable;
 use Workflow\V2\Contracts\HistoryProjectionRole;
 use Workflow\V2\Enums\TaskStatus;
@@ -18,6 +17,7 @@ use Workflow\V2\Models\WorkflowRun;
 use Workflow\V2\Models\WorkflowTask;
 use Workflow\V2\Support\ConfiguredV2Models;
 use Workflow\V2\Support\StickyExecution;
+use Workflow\V2\Support\StorageConnection;
 use Workflow\V2\Support\TaskBackendCapabilities;
 use Workflow\V2\Support\TaskCompatibility;
 use Workflow\V2\Support\TaskDispatcher;
@@ -54,7 +54,7 @@ final class RunWorkflowTask implements ShouldQueue
         $nextTask = null;
 
         try {
-            $nextTask = DB::transaction(function () use ($executor): ?WorkflowTask {
+            $nextTask = StorageConnection::transaction(function () use ($executor): ?WorkflowTask {
                 /** @var WorkflowTask $task */
                 $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                     ->lockForUpdate()
@@ -83,7 +83,7 @@ final class RunWorkflowTask implements ShouldQueue
                 return $executor->run($run, $task);
             });
         } catch (Throwable $throwable) {
-            DB::transaction(function () use ($throwable): void {
+            StorageConnection::transaction(function () use ($throwable): void {
                 /** @var WorkflowTask|null $task */
                 $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                     ->lockForUpdate()
@@ -114,7 +114,7 @@ final class RunWorkflowTask implements ShouldQueue
 
     private function claimTask(): bool
     {
-        return DB::transaction(function (): bool {
+        return StorageConnection::transaction(function (): bool {
             /** @var WorkflowTask|null $task */
             $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                 ->lockForUpdate()

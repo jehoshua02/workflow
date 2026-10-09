@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Workflow\V2;
 
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 use Workflow\V2\Contracts\HistoryProjectionRole;
@@ -19,6 +18,7 @@ use Workflow\V2\Models\WorkflowRunSummary;
 use Workflow\V2\Models\WorkflowTask;
 use Workflow\V2\Support\ActivityTimeoutEnforcer;
 use Workflow\V2\Support\RequestedTaskScope;
+use Workflow\V2\Support\StorageConnection;
 use Workflow\V2\Support\TaskCompatibility;
 use Workflow\V2\Support\TaskDispatcher;
 use Workflow\V2\Support\TaskRepair;
@@ -218,7 +218,7 @@ final class TaskWatchdog
     private static function recoverExistingTask(string $candidateId): array
     {
         try {
-            $task = DB::transaction(static function () use ($candidateId): ?WorkflowTask {
+            $task = StorageConnection::transaction(static function () use ($candidateId): ?WorkflowTask {
                 /** @var WorkflowTask|null $task */
                 $task = WorkflowTask::query()
                     ->lockForUpdate()
@@ -280,7 +280,7 @@ final class TaskWatchdog
     private static function recoverMissingTask(string $runId): array
     {
         try {
-            $task = DB::transaction(static function () use ($runId): ?WorkflowTask {
+            $task = StorageConnection::transaction(static function () use ($runId): ?WorkflowTask {
                 /** @var WorkflowRun $run */
                 $run = WorkflowRun::query()
                     ->with(['instance', 'tasks', 'activityExecutions', 'timers', 'failures', 'historyEvents'])
@@ -453,7 +453,7 @@ final class TaskWatchdog
     private static function createDeadlineExpiredTask(string $runId): array
     {
         try {
-            $task = DB::transaction(static function () use ($runId): ?WorkflowTask {
+            $task = StorageConnection::transaction(static function () use ($runId): ?WorkflowTask {
                 /** @var WorkflowRun|null $run */
                 $run = WorkflowRun::query()
                     ->lockForUpdate()

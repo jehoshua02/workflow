@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Workflow\V2\Support;
 
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -256,7 +255,7 @@ final class DefaultWorkflowTaskBridge implements WorkflowTaskBridge
 
     public function claimStatus(string $taskId, ?string $leaseOwner = null): array
     {
-        return DB::transaction(static function () use ($taskId, $leaseOwner): array {
+        return StorageConnection::transaction(static function () use ($taskId, $leaseOwner): array {
             /** @var WorkflowTask|null $task */
             $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                 ->lockForUpdate()
@@ -552,7 +551,7 @@ final class DefaultWorkflowTaskBridge implements WorkflowTaskBridge
         $nextTask = null;
 
         try {
-            $nextTask = DB::transaction(function () use ($taskId): ?WorkflowTask {
+            $nextTask = StorageConnection::transaction(function () use ($taskId): ?WorkflowTask {
                 /** @var WorkflowTask $task */
                 $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                     ->lockForUpdate()
@@ -579,7 +578,7 @@ final class DefaultWorkflowTaskBridge implements WorkflowTaskBridge
                 return $this->executor->run($run, $task);
             });
         } catch (Throwable $throwable) {
-            DB::transaction(static function () use ($taskId, $throwable): void {
+            StorageConnection::transaction(static function () use ($taskId, $throwable): void {
                 /** @var WorkflowTask|null $task */
                 $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                     ->lockForUpdate()
@@ -632,7 +631,7 @@ final class DefaultWorkflowTaskBridge implements WorkflowTaskBridge
 
     public function fail(string $taskId, Throwable|array|string $failure, ?string $codec = null): array
     {
-        return DB::transaction(static function () use ($taskId, $failure): array {
+        return StorageConnection::transaction(static function () use ($taskId, $failure): array {
             /** @var WorkflowTask|null $task */
             $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                 ->lockForUpdate()
@@ -690,7 +689,7 @@ final class DefaultWorkflowTaskBridge implements WorkflowTaskBridge
 
     public function heartbeat(string $taskId): array
     {
-        return DB::transaction(static function () use ($taskId): array {
+        return StorageConnection::transaction(static function () use ($taskId): array {
             /** @var WorkflowTask|null $task */
             $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                 ->lockForUpdate()
@@ -844,7 +843,7 @@ final class DefaultWorkflowTaskBridge implements WorkflowTaskBridge
             ];
         }
 
-        return DB::transaction(function () use ($taskId, $parsed): array {
+        return StorageConnection::transaction(function () use ($taskId, $parsed): array {
             /** @var WorkflowTask|null $task */
             $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                 ->lockForUpdate()
@@ -6083,7 +6082,7 @@ final class DefaultWorkflowTaskBridge implements WorkflowTaskBridge
      */
     private function claimIfReady(string $taskId): bool
     {
-        return DB::transaction(static function () use ($taskId): bool {
+        return StorageConnection::transaction(static function () use ($taskId): bool {
             /** @var WorkflowTask|null $task */
             $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                 ->lockForUpdate()

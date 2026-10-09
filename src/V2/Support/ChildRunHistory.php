@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Workflow\V2\Support;
 
-use Illuminate\Support\Facades\DB;
 use RuntimeException;
 use Throwable;
 use Workflow\Serializers\Serializer;
@@ -676,13 +675,7 @@ final class ChildRunHistory
             }
         };
 
-        if (DB::transactionLevel() > 0) {
-            DB::afterCommit($callback);
-
-            return;
-        }
-
-        $callback();
+        StorageConnection::afterCommit($callback);
     }
 
     /**

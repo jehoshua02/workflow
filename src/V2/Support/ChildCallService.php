@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Workflow\V2\Support;
 
-use Illuminate\Support\Facades\DB;
 use Workflow\V2\Enums\ChildCallStatus;
 use Workflow\V2\Enums\ParentClosePolicy;
 use Workflow\V2\Models\WorkflowChildCall;
@@ -222,7 +221,7 @@ class ChildCallService
      */
     public function transferChildCallsToContinuedRun(WorkflowRun $closingRun, WorkflowRun $continuedRun): void
     {
-        DB::transaction(static function () use ($closingRun, $continuedRun): void {
+        StorageConnection::transaction(static function () use ($closingRun, $continuedRun): void {
             // Transfer open children to new run
             WorkflowChildCall::where('parent_workflow_run_id', $closingRun->id)
                 ->whereIn('status', [ChildCallStatus::Scheduled->value, ChildCallStatus::Started->value])

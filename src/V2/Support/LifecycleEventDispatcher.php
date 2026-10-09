@@ -28,8 +28,9 @@ use Workflow\V2\Models\WorkflowRun;
  *
  * Call sites dispatch only after the durable lifecycle write is no longer
  * eligible to roll back. Retried transaction paths must dispatch after
- * DB::transaction() returns successfully (or via DB::afterCommit()) so a
- * failed attempt cannot leak duplicate public events.
+ * StorageConnection::transaction() returns successfully (or via
+ * StorageConnection::afterCommit()) so a failed attempt cannot leak duplicate
+ * public events.
  *
  * Events carry scalar identity values captured eagerly from the models and
  * are dispatched synchronously within the same request/job that committed

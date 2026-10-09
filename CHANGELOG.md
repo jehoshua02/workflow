@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Open the V2 engine's database transactions on the configured
+  `workflows.storage.connection` instead of the application's default
+  connection. With a dedicated storage connection, every `lockForUpdate()`
+  ran outside a transaction and released its row lock at once, so two workers
+  could claim the same activity task. Post-commit task dispatch now waits for
+  the storage transaction too. Behavior on the default connection is
+  unchanged.
 - Check for the engine's tables on the configured `workflows.storage.connection`
   instead of the application's default connection when gating the V2 task
   watchdog, worker-compatibility heartbeats, and the v1 watchdog. With a
