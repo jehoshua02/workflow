@@ -7,15 +7,18 @@ namespace Tests\Unit\V2;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Database\Events\TransactionBeginning;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
 use Tests\Fixtures\V2\TestCommandTargetWorkflow;
 use Tests\Fixtures\V2\TestGreetingActivity;
+use Tests\Fixtures\V2\TestLocalDefaultConnectionWriteWorkflow;
 use Tests\Fixtures\V2\TestParentChildWorkflow;
 use Tests\Fixtures\V2\TestScheduledWorkflow;
 use Tests\Fixtures\V2\TestSignalWorkflow;
@@ -32,7 +35,9 @@ use Workflow\V2\Enums\ScheduleStatus;
 use Workflow\V2\Enums\SignalStatus;
 use Workflow\V2\Enums\TaskStatus;
 use Workflow\V2\Enums\TaskType;
+use Workflow\V2\Events\WorkflowCompleted;
 use Workflow\V2\Jobs\RunWorkflowTask;
+use Workflow\V2\Models\ActivityExecution;
 use Workflow\V2\Models\WorkflowChildCall;
 use Workflow\V2\Models\WorkflowHistoryEvent;
 use Workflow\V2\Models\WorkflowInstance;
@@ -440,6 +445,47 @@ final class StorageConnectionTransactionBoundaryTest extends SchemaTestCase
             'target.import_markers_missing',
             array_column($report['eligibility']['errors'], 'rule'),
         );
+    }
+
+    public function testLocalActivityWritesOnTheDefaultConnectionSurviveAnEngineRollback(): void
+    {
+        Schema::dropIfExists('local_activity_side_effects');
+        Schema::create('local_activity_side_effects', static function (Blueprint $table): void {
+            $table->string('name');
+        });
+
+        try {
+            $thrown = false;
+            Event::listen(WorkflowCompleted::class, static function () use (&$thrown): void {
+                if (! $thrown) {
+                    $thrown = true;
+
+                    throw new RuntimeException('engine write failed');
+                }
+            });
+
+            WorkflowStub::fake();
+            $workflow = WorkflowStub::make(TestLocalDefaultConnectionWriteWorkflow::class, 'storage-boundary-local');
+
+            try {
+                $workflow->start('side-effect');
+                $this->fail('The workflow task should have thrown.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame('engine write failed', $exception->getMessage());
+            }
+
+            $this->assertTrue($thrown);
+            $stub = WorkflowStub::load('storage-boundary-local');
+            $this->assertFalse($stub->completed());
+            $this->assertSame(0, ActivityExecution::query()->where('workflow_run_id', $stub->runId())->count());
+            $this->assertSame(
+                'engine write failed',
+                WorkflowTask::query()->where('workflow_run_id', $stub->runId())->sole()->last_error,
+            );
+            $this->assertSame(['side-effect'], DB::table('local_activity_side_effects')->pluck('name')->all());
+        } finally {
+            Schema::dropIfExists('local_activity_side_effects');
+        }
     }
 
     public function testUnknownStorageConnectionFailsLoudlyInsteadOfFallingBackToTheDefault(): void

@@ -6,9 +6,21 @@
   `workflows.storage.connection` instead of the application's default
   connection. With a dedicated storage connection, every `lockForUpdate()`
   ran outside a transaction and released its row lock at once, so two workers
-  could claim the same activity task. Post-commit task dispatch now waits for
-  the storage transaction too. Behavior on the default connection is
-  unchanged.
+  could claim the same activity task. Behavior on the default connection is
+  unchanged. Apps that set `workflows.storage.connection` to another
+  connection should note three behavior changes:
+  - Engine writes are now atomic. History, summary, task and execution writes
+    that used to autocommit one by one now commit or roll back together.
+  - App writes on other connections no longer roll back with an engine
+    failure when they run inside an engine transaction. That code is workflow
+    code during replay, local activity bodies, and synchronous lifecycle-event
+    listeners. Regular activities are unaffected: `RunActivityTask` claims the
+    task, runs the activity body outside any transaction, then records the
+    outcome.
+  - Post-commit task dispatch waits for the storage transaction to commit,
+    and also for an open default-connection transaction, so a workflow started
+    or signalled inside the app's own transaction is not published before
+    that transaction commits, or at all if it rolls back.
 - Check for the engine's tables on the configured `workflows.storage.connection`
   instead of the application's default connection when gating the V2 task
   watchdog, worker-compatibility heartbeats, and the v1 watchdog. With a
