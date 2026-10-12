@@ -51,11 +51,32 @@ final class StorageConnection
     /**
      * Runs the callback after the storage connection's open transaction
      * commits, or immediately when none is open.
+     *
+     * When the storage connection is separate from the default connection,
+     * the callback also waits for an open default-connection transaction,
+     * so work the application started inside its own transaction is not
+     * published before that transaction commits, or at all if it rolls back.
      */
     public static function afterCommit(callable $callback): void
     {
-        if (self::transactionLevel() > 0) {
-            self::connection()->afterCommit($callback);
+        $storage = self::connection();
+
+        if ($storage->transactionLevel() > 0) {
+            $storage->afterCommit(static fn () => self::afterDefaultCommit($storage, $callback));
+
+            return;
+        }
+
+        self::afterDefaultCommit($storage, $callback);
+    }
+
+    private static function afterDefaultCommit(Connection $storage, callable $callback): void
+    {
+        /** @var Connection $default */
+        $default = DB::connection();
+
+        if ($default !== $storage && $default->transactionLevel() > 0) {
+            $default->afterCommit($callback);
 
             return;
         }
