@@ -24,17 +24,22 @@ use Workflow\V2\Events\WorkflowStarted;
 use Workflow\V2\Models\WorkflowRun;
 
 /**
- * Dispatches V2 lifecycle events from committed durable truth.
+ * Dispatches V2 lifecycle events.
  *
- * Call sites dispatch only after the durable lifecycle write is no longer
- * eligible to roll back. Retried transaction paths must dispatch after
- * StorageConnection::transaction() returns successfully (or via
- * StorageConnection::afterCommit()) so a failed attempt cannot leak duplicate
- * public events.
+ * Events are dispatched synchronously, in the request or job that made the
+ * state change. Most call sites dispatch inside the engine transaction that
+ * writes the change, on the storage connection: activity events, failure
+ * events, and workflow completion and failure. A listener can therefore see
+ * an event whose write later rolls back. With a separate storage connection,
+ * its own writes on another connection do not roll back with the engine.
+ * Listeners that need committed state should defer their work, for example
+ * with a queued listener that runs after commit.
  *
- * Events carry scalar identity values captured eagerly from the models and
- * are dispatched synchronously within the same request/job that committed
- * the state change.
+ * New call sites should dispatch after StorageConnection::transaction()
+ * returns, or through StorageConnection::afterCommit(), so a failed attempt
+ * cannot publish an event.
+ *
+ * Events carry scalar identity values captured eagerly from the models.
  */
 final class LifecycleEventDispatcher
 {
