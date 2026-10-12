@@ -14,18 +14,25 @@ use InvalidArgumentException;
 use RuntimeException;
 use Tests\Fixtures\V2\TestCommandTargetWorkflow;
 use Tests\Fixtures\V2\TestGreetingActivity;
+use Tests\Fixtures\V2\TestParentChildWorkflow;
 use Tests\Fixtures\V2\TestSignalWorkflow;
 use Tests\Fixtures\V2\TestTimerWorkflow;
 use Tests\SchemaTestCase;
 use Workflow\Serializers\CodecRegistry;
 use Workflow\Serializers\Serializer;
+use Workflow\V2\Contracts\WorkflowTaskBridge;
+use Workflow\V2\Enums\ChildCallStatus;
+use Workflow\V2\Enums\MessageChannel;
 use Workflow\V2\Enums\RunStatus;
 use Workflow\V2\Enums\TaskStatus;
 use Workflow\V2\Enums\TaskType;
 use Workflow\V2\Jobs\RunWorkflowTask;
+use Workflow\V2\Models\WorkflowChildCall;
 use Workflow\V2\Models\WorkflowInstance;
+use Workflow\V2\Models\WorkflowMessage;
 use Workflow\V2\Models\WorkflowRun;
 use Workflow\V2\Models\WorkflowTask;
+use Workflow\V2\Support\MessageService;
 use Workflow\V2\Support\StorageConnection;
 use Workflow\V2\Support\TaskDispatcher;
 use Workflow\V2\TaskWatchdog;
@@ -85,6 +92,110 @@ final class StorageConnectionTransactionBoundaryTest extends SchemaTestCase
         $this->assertTrue(WorkflowStub::load('storage-boundary-timer')->completed());
         $this->assertContains('storage', $this->began);
         $this->assertNotContains((string) config('database.default'), $this->began);
+    }
+
+    public function testChildRunProjectionWritesWaitForTheStorageCommit(): void
+    {
+        WorkflowStub::mock(TestGreetingActivity::class, 'Hello, Taylor!');
+
+        $levels = [];
+        WorkflowChildCall::saved(static function () use (&$levels): void {
+            $levels[] = StorageConnection::transactionLevel();
+        });
+
+        $parent = WorkflowStub::make(TestParentChildWorkflow::class, 'storage-boundary-parent');
+        $parent->start('Taylor');
+        WorkflowStub::runReadyTasks();
+
+        $this->assertTrue(WorkflowStub::load('storage-boundary-parent')->completed());
+        $this->assertSame(
+            ChildCallStatus::Completed,
+            WorkflowChildCall::query()->where('parent_workflow_instance_id', 'storage-boundary-parent')->sole()->status,
+        );
+        $this->assertNotSame([], $levels);
+        $this->assertSame([0], array_values(array_unique($levels)));
+        $this->assertContains('storage', $this->began);
+        $this->assertNotContains((string) config('database.default'), $this->began);
+    }
+
+    public function testMessageServiceOpensItsTransactionsOnTheStorageConnection(): void
+    {
+        $service = new MessageService();
+        $source = $this->createWorkflowTask('storage-boundary-message-source')
+->run;
+        $closing = $this->createWorkflowTask('storage-boundary-message-target')
+->run;
+
+        $first = $service->sendMessage($source, MessageChannel::Signal, $closing->workflow_instance_id, null, 'stream');
+        $service->sendMessage($source, MessageChannel::Signal, $closing->workflow_instance_id, null, 'stream');
+        $service->sendMessage($source, MessageChannel::Signal, $closing->workflow_instance_id, null, 'stream');
+        $this->assertStorageTransactionsOnly();
+
+        $inbound = $service->receiveMessages($closing, 'stream', 10);
+        $this->assertCount(3, $inbound);
+
+        $service->consumeMessage($closing, $inbound[0], 10);
+        $this->assertStorageTransactionsOnly();
+
+        $service->consumeMessages($closing, [$inbound[1]], 11);
+        $this->assertStorageTransactionsOnly();
+
+        $continued = WorkflowRun::query()->create([
+            'id' => (string) Str::ulid(),
+            'workflow_instance_id' => $closing->workflow_instance_id,
+            'run_number' => 2,
+            'workflow_class' => TestCommandTargetWorkflow::class,
+            'workflow_type' => 'test-command-target-workflow',
+            'status' => RunStatus::Waiting->value,
+            'payload_codec' => CodecRegistry::defaultCodec(),
+            'arguments' => Serializer::serializeWithCodec(CodecRegistry::defaultCodec(), []),
+            'connection' => 'redis',
+            'queue' => 'default',
+            'started_at' => now(),
+        ]);
+        $service->transferMessagesToContinuedRun($closing->fresh(), $continued);
+        $this->assertStorageTransactionsOnly();
+
+        $this->assertSame(1, $first->sequence);
+        $this->assertSame(2, $continued->fresh()->message_cursor_position);
+        $this->assertSame(
+            $continued->id,
+            WorkflowMessage::query()->whereKey($inbound[2]->id)->sole()->workflow_run_id,
+        );
+    }
+
+    public function testWorkflowTaskBridgeOpensItsTransactionsOnTheStorageConnection(): void
+    {
+        Queue::fake();
+
+        /** @var WorkflowTaskBridge $bridge */
+        $bridge = $this->app->make(WorkflowTaskBridge::class);
+
+        $completed = $this->createWorkflowTask('storage-boundary-bridge-complete');
+        $this->began = [];
+        $this->assertTrue($bridge->claimStatus($completed->id, 'external-worker')['claimed']);
+        $this->assertStorageTransactionsOnly();
+        $this->assertTrue($bridge->heartbeat($completed->id)['renewed']);
+        $this->assertStorageTransactionsOnly();
+        $result = $bridge->complete($completed->id, [[
+            'type' => 'complete_workflow',
+            'result' => Serializer::serializeWithCodec(CodecRegistry::defaultCodec(), 'done'),
+        ]]);
+        $this->assertTrue($result['completed'], json_encode($result, JSON_THROW_ON_ERROR));
+        $this->assertStorageTransactionsOnly();
+
+        $failed = $this->createWorkflowTask('storage-boundary-bridge-fail');
+        $this->began = [];
+        $this->assertTrue($bridge->claimStatus($failed->id, 'external-worker')['claimed']);
+        $this->assertTrue($bridge->fail($failed->id, 'worker crashed')['recorded']);
+        $this->assertStorageTransactionsOnly();
+        $this->assertSame(TaskStatus::Failed, $failed->fresh()->status);
+
+        $executed = $this->createWorkflowTask('storage-boundary-bridge-execute');
+        $this->began = [];
+        $this->assertTrue($bridge->execute($executed->id)['executed']);
+        $this->assertStorageTransactionsOnly();
+        $this->assertSame(TaskStatus::Completed, $executed->fresh()->status);
     }
 
     public function testWatchdogRepairOpensNoTransactionOnTheDefaultConnection(): void
@@ -277,6 +388,13 @@ final class StorageConnectionTransactionBoundaryTest extends SchemaTestCase
             'foreign_key_constraints' => false,
         ]);
         $app['config']->set('workflows.storage.connection', 'storage');
+    }
+
+    private function assertStorageTransactionsOnly(): void
+    {
+        $this->assertNotSame([], $this->began);
+        $this->assertSame(['storage'], array_values(array_unique($this->began)));
+        $this->began = [];
     }
 
     /**
