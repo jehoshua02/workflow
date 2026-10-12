@@ -115,7 +115,7 @@ final class RunWorkflowTask implements ShouldQueue
 
     private function claimTask(): bool
     {
-        return StorageConnection::transaction(function (): bool {
+        return StorageConnection::claimTransaction(function (): bool {
             /** @var WorkflowTask|null $task */
             $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                 ->lockForUpdate()
@@ -158,7 +158,7 @@ final class RunWorkflowTask implements ShouldQueue
             $this->projectRun($run->fresh(['instance', 'tasks', 'activityExecutions', 'failures']));
 
             return true;
-        });
+        }, static fn (): bool => false);
     }
 
     private function projectRun(WorkflowRun $run): void

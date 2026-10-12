@@ -268,7 +268,7 @@ final class RunTimerTask implements ShouldQueue
      */
     private function claimTask(): array
     {
-        return StorageConnection::transaction(function (): array {
+        return StorageConnection::claimTransaction(function (): array {
             /** @var WorkflowTask|null $task */
             $task = WorkflowTask::query()
                 ->lockForUpdate()
@@ -335,7 +335,7 @@ final class RunTimerTask implements ShouldQueue
             $this->projectRun($run, self::PROJECTION_RUN_RELATIONS);
 
             return [$timerId, null];
-        });
+        }, static fn (): array => [null, null]);
     }
 
     /**

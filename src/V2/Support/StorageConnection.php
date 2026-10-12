@@ -6,6 +6,7 @@ namespace Workflow\V2\Support;
 
 use Closure;
 use Illuminate\Database\Connection;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -47,6 +48,55 @@ final class StorageConnection
     public static function transaction(Closure $callback, int $attempts = 1): mixed
     {
         return self::connection()->transaction($callback, $attempts);
+    }
+
+    /**
+     * Runs a task claim in its own storage transaction, returning
+     * `$onLocked()` when a peer holds the rows it needs to lock.
+     *
+     * Contention is only absorbed when this call opens the outermost storage
+     * transaction. Inside an open one, a deadlock has already rolled back the
+     * caller's whole transaction, so the error must reach the caller.
+     *
+     * @template TReturn
+     * @template TLocked
+     *
+     * @param Closure(Connection): TReturn $callback
+     * @param Closure(): TLocked $onLocked
+     * @return TReturn|TLocked
+     */
+    public static function claimTransaction(Closure $callback, Closure $onLocked): mixed
+    {
+        if (self::transactionLevel() > 0) {
+            return self::transaction($callback);
+        }
+
+        try {
+            return self::transaction($callback);
+        } catch (QueryException $exception) {
+            if (! self::isLockContention($exception)) {
+                throw $exception;
+            }
+
+            return $onLocked();
+        }
+    }
+
+    /**
+     * Whether the query failed because another transaction holds a row lock
+     * it needed: a lock wait timeout, a deadlock, or a NOWAIT refusal.
+     */
+    public static function isLockContention(QueryException $exception): bool
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? '');
+        $driverCode = (int) ($exception->errorInfo[1] ?? 0);
+
+        if ($sqlState === '40P01' || $sqlState === '55P03') {
+            return true;
+        }
+
+        // MySQL: 1205 lock wait timeout, 1213 deadlock, 3572 NOWAIT lock refused.
+        return in_array($driverCode, [1205, 1213, 3572], true);
     }
 
     public static function transactionLevel(): int

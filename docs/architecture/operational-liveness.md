@@ -255,8 +255,10 @@ Rules:
   codes `task_not_found`, `task_not_activity`, `task_not_ready`,
   `task_not_due`, `activity_execution_missing`,
   `activity_execution_not_found`, `workflow_run_missing`,
-  `backend_unsupported`, and `compatibility_unsupported` are
-  frozen; adding a reason is a protocol change.
+  `backend_unsupported`, `compatibility_unsupported`, and
+  `task_locked` are frozen; adding a reason is a protocol change.
+  `task_locked` means the claim lost a row-lock race; treat it like
+  `task_not_ready`.
 - A transport job whose claim reports
   `compatibility_unsupported` or `backend_unsupported` MUST return
   the task to `Ready` without consuming it, so the next eligible

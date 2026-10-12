@@ -231,6 +231,9 @@ one of:
   `TaskBackendCapabilities::recordClaimFailureIfUnsupported()`).
 - `compatibility_blocked` — the worker's `supported` compatibility
   set does not cover the task's required marker, per Phase 2.
+- `task_not_claimable` with `reason_detail` `task_locked` — the claim
+  timed out or deadlocked waiting for a row lock held by a concurrent
+  transaction. Treat it as a lost race.
 
 A successful claim writes `status = leased`, `leased_at`,
 `lease_owner`, `lease_expires_at`, and increments `attempt_count` on
@@ -246,6 +249,10 @@ one of:
   `task_not_due` (with `retry_after_seconds`),
   `activity_execution_missing`, `workflow_run_missing`,
   `backend_unsupported`, `compatibility_unsupported`.
+- `task_locked` — the claim timed out or deadlocked waiting for a row
+  lock. Only returned when the claim opened the outermost storage
+  transaction; inside an open one the database error propagates,
+  because a deadlock has already rolled the caller's transaction back.
 - A successful claim creates an `ActivityAttempt` row, transitions
   the activity execution to `Running`, records `ActivityStarted`,
   and dispatches the lifecycle event hook.

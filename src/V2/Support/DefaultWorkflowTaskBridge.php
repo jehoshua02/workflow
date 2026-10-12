@@ -260,7 +260,7 @@ final class DefaultWorkflowTaskBridge implements CooperativeWorkflowTaskBridge, 
 
     public function claimStatus(string $taskId, ?string $leaseOwner = null): array
     {
-        return StorageConnection::transaction(static function () use ($taskId, $leaseOwner): array {
+        return StorageConnection::claimTransaction(static function () use ($taskId, $leaseOwner): array {
             /** @var WorkflowTask|null $task */
             $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                 ->lockForUpdate()
@@ -358,7 +358,7 @@ final class DefaultWorkflowTaskBridge implements CooperativeWorkflowTaskBridge, 
                 'reason' => null,
                 'reason_detail' => null,
             ];
-        });
+        }, static fn (): array => self::claimRejected($taskId, 'task_not_claimable', 'task_locked'));
     }
 
     public function claim(string $taskId, ?string $leaseOwner = null): ?array
@@ -7122,7 +7122,7 @@ final class DefaultWorkflowTaskBridge implements CooperativeWorkflowTaskBridge, 
      */
     private function claimIfReady(string $taskId): bool
     {
-        return StorageConnection::transaction(static function () use ($taskId): bool {
+        return StorageConnection::claimTransaction(static function () use ($taskId): bool {
             /** @var WorkflowTask|null $task */
             $task = ConfiguredV2Models::query('task_model', WorkflowTask::class)
                 ->lockForUpdate()
@@ -7174,7 +7174,7 @@ final class DefaultWorkflowTaskBridge implements CooperativeWorkflowTaskBridge, 
             self::projectRun($run, self::PROJECTION_RUN_RELATIONS);
 
             return true;
-        });
+        }, static fn (): bool => false);
     }
 
     /**

@@ -44,7 +44,7 @@ final class ActivityTaskClaimer
         ?string $leaseOwner = null,
         bool $releaseFutureTasks = false,
     ): array {
-        return StorageConnection::transaction(static function () use (
+        return StorageConnection::claimTransaction(static function () use (
             $taskId,
             $leaseOwner,
             $releaseFutureTasks
@@ -181,7 +181,7 @@ final class ActivityTaskClaimer
             self::historyProjectionRole()->recordActivityStarted($run, $execution, $attempt, $task);
 
             return self::claimSuccess(new ActivityTaskClaim($task, $run, $execution, $attempt));
-        });
+        }, static fn (): array => self::claimFailure('task_locked'));
     }
 
     /**

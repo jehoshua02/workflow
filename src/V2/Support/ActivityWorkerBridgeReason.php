@@ -13,7 +13,8 @@ final class ActivityWorkerBridgeReason
             'compatibility_unsupported' => 'compatibility_blocked',
             'task_not_activity',
             'activity_execution_missing',
-            'workflow_run_missing' => 'task_not_claimable',
+            'workflow_run_missing',
+            'task_locked' => 'task_not_claimable',
             default => $reason,
         };
     }
@@ -23,7 +24,8 @@ final class ActivityWorkerBridgeReason
         return match ($reason) {
             'task_not_activity',
             'activity_execution_missing',
-            'workflow_run_missing' => $reason,
+            'workflow_run_missing',
+            'task_locked' => $reason,
             default => null,
         };
     }

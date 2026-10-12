@@ -42,6 +42,11 @@
   dedicated storage connection those gates were always false, so expired
   leases were never repaired and activity timeouts never enforced. Behaviour
   on the default connection is unchanged.
+- Return a `task_locked` claim failure when a claim times out or deadlocks
+  waiting for a task's row lock, instead of failing the queue job. The claim
+  must open the outermost storage transaction; inside an open one the error
+  still propagates. Worker-facing claim responses report it as
+  `task_not_claimable` with `reason_detail` `task_locked`.
 
 ## 2.5.7 - 2026-10-10
 
