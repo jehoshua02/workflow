@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Unit\V2;
 
+use DateTimeImmutable;
+use DateTimeZone;
 use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -15,6 +17,7 @@ use RuntimeException;
 use Tests\Fixtures\V2\TestCommandTargetWorkflow;
 use Tests\Fixtures\V2\TestGreetingActivity;
 use Tests\Fixtures\V2\TestParentChildWorkflow;
+use Tests\Fixtures\V2\TestScheduledWorkflow;
 use Tests\Fixtures\V2\TestSignalWorkflow;
 use Tests\Fixtures\V2\TestTimerWorkflow;
 use Tests\SchemaTestCase;
@@ -24,17 +27,25 @@ use Workflow\V2\Contracts\WorkflowTaskBridge;
 use Workflow\V2\Enums\ChildCallStatus;
 use Workflow\V2\Enums\MessageChannel;
 use Workflow\V2\Enums\RunStatus;
+use Workflow\V2\Enums\ScheduleOverlapPolicy;
+use Workflow\V2\Enums\ScheduleStatus;
+use Workflow\V2\Enums\SignalStatus;
 use Workflow\V2\Enums\TaskStatus;
 use Workflow\V2\Enums\TaskType;
 use Workflow\V2\Jobs\RunWorkflowTask;
 use Workflow\V2\Models\WorkflowChildCall;
+use Workflow\V2\Models\WorkflowHistoryEvent;
 use Workflow\V2\Models\WorkflowInstance;
 use Workflow\V2\Models\WorkflowMessage;
 use Workflow\V2\Models\WorkflowRun;
+use Workflow\V2\Models\WorkflowRunSummary;
+use Workflow\V2\Models\WorkflowSignal;
 use Workflow\V2\Models\WorkflowTask;
 use Workflow\V2\Support\MessageService;
+use Workflow\V2\Support\ScheduleManager;
 use Workflow\V2\Support\StorageConnection;
 use Workflow\V2\Support\TaskDispatcher;
+use Workflow\V2\Support\WorkflowExecutor;
 use Workflow\V2\TaskWatchdog;
 use Workflow\V2\WorkflowStub;
 
@@ -218,6 +229,97 @@ final class StorageConnectionTransactionBoundaryTest extends SchemaTestCase
         $this->assertNotContains((string) config('database.default'), $this->began);
     }
 
+    public function testWatchdogMissingTaskAndDeadlineRepairsOpenNoTransactionOnTheDefaultConnection(): void
+    {
+        Queue::fake();
+        Cache::forget(TaskWatchdog::LOOP_THROTTLE_KEY);
+
+        $this->createRepairNeededSignalRun('storage-boundary-watchdog-missing');
+        $deadline = $this->createWaitingRun('storage-boundary-watchdog-deadline');
+        $deadline->forceFill([
+            'run_deadline_at' => now()
+                ->subMinute(),
+        ])->save();
+        $this->began = [];
+
+        $report = TaskWatchdog::runPass(respectThrottle: false);
+
+        $this->assertSame(1, $report['repaired_missing_tasks'], json_encode($report, JSON_THROW_ON_ERROR));
+        $this->assertSame(1, $report['deadline_expired_tasks_created'], json_encode($report, JSON_THROW_ON_ERROR));
+        $this->assertStorageTransactionsOnly();
+    }
+
+    public function testWorkflowTaskFailurePathOpensNoTransactionOnTheDefaultConnection(): void
+    {
+        $task = $this->createWorkflowTask('storage-boundary-task-failure');
+        $failed = false;
+        WorkflowHistoryEvent::creating(static function () use (&$failed): void {
+            if (! $failed) {
+                $failed = true;
+
+                throw new RuntimeException('history write failed');
+            }
+        });
+        $this->began = [];
+
+        try {
+            (new RunWorkflowTask($task->id))->handle($this->app->make(WorkflowExecutor::class));
+            $this->fail('The workflow task should have thrown.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('history write failed', $exception->getMessage());
+        }
+
+        $this->assertTrue($failed);
+        $this->assertSame(TaskStatus::Failed, $task->fresh()->status);
+        $this->assertSame('history write failed', $task->fresh()->last_error);
+        $this->assertStorageTransactionsOnly();
+    }
+
+    public function testScheduleTransactionsOpenOnTheStorageConnection(): void
+    {
+        WorkflowStub::fake();
+
+        $schedule = ScheduleManager::create(
+            scheduleId: 'storage-boundary-schedule',
+            workflowClass: TestScheduledWorkflow::class,
+            cronExpression: '0 * * * *',
+            overlapPolicy: ScheduleOverlapPolicy::AllowAll,
+        );
+        $buffered = $schedule->fresh();
+        $buffered->bufferAction();
+        $buffered->save();
+        $this->began = [];
+
+        $this->assertSame('drained', ScheduleManager::tick()[0]['outcome']);
+        $this->assertStorageTransactionsOnly();
+
+        $this->assertNotNull(ScheduleManager::trigger($schedule->fresh()));
+        $this->assertStorageTransactionsOnly();
+
+        $schedule->fresh()
+            ->forceFill([
+                'next_fire_at' => now()
+                    ->subMinute(),
+            ])->save();
+        $this->began = [];
+        $this->assertSame('triggered', ScheduleManager::tick()[0]['outcome']);
+        $this->assertStorageTransactionsOnly();
+
+        $results = ScheduleManager::backfill(
+            $schedule->fresh(),
+            new DateTimeImmutable('2026-04-14 00:00:00', new DateTimeZone('UTC')),
+            new DateTimeImmutable('2026-04-14 02:00:00', new DateTimeZone('UTC')),
+        );
+        $this->assertCount(2, $results);
+        $this->assertStorageTransactionsOnly();
+
+        ScheduleManager::delete($schedule->fresh());
+        $this->assertStorageTransactionsOnly();
+
+        $this->assertSame(5, (int) $schedule->fresh()->fires_count);
+        $this->assertSame(ScheduleStatus::Deleted, $schedule->fresh()->status);
+    }
+
     public function testDispatchIsDroppedWhenTheStorageTransactionRollsBack(): void
     {
         Queue::fake();
@@ -397,10 +499,52 @@ final class StorageConnectionTransactionBoundaryTest extends SchemaTestCase
         $this->began = [];
     }
 
-    /**
-     * @param array<string, mixed> $attributes
-     */
-    private function createWorkflowTask(string $instanceId, array $attributes = []): WorkflowTask
+    private function createRepairNeededSignalRun(string $instanceId): WorkflowRun
+    {
+        $run = $this->createWaitingRun($instanceId);
+
+        /** @var WorkflowSignal $signal */
+        $signal = WorkflowSignal::query()->create([
+            'id' => (string) Str::ulid(),
+            'workflow_command_id' => (string) Str::ulid(),
+            'workflow_instance_id' => $run->workflow_instance_id,
+            'workflow_run_id' => $run->id,
+            'target_scope' => 'instance',
+            'resolved_workflow_run_id' => $run->id,
+            'signal_name' => 'name-provided',
+            'status' => SignalStatus::Received->value,
+            'payload_codec' => CodecRegistry::defaultCodec(),
+            'arguments' => Serializer::serializeWithCodec(CodecRegistry::defaultCodec(), []),
+            'received_at' => now()
+                ->subMinute(),
+        ]);
+
+        WorkflowRunSummary::query()->create([
+            'id' => $run->id,
+            'workflow_instance_id' => $run->workflow_instance_id,
+            'run_number' => 1,
+            'is_current_run' => true,
+            'engine_source' => 'v2',
+            'class' => TestCommandTargetWorkflow::class,
+            'workflow_type' => 'test-command-target-workflow',
+            'status' => RunStatus::Waiting->value,
+            'status_bucket' => 'running',
+            'connection' => 'redis',
+            'queue' => 'default',
+            'started_at' => $run->started_at,
+            'wait_kind' => 'signal',
+            'wait_reason' => 'Waiting to apply signal name-provided',
+            'open_wait_id' => sprintf('signal-application:%s', $signal->id),
+            'resume_source_kind' => 'workflow_signal',
+            'resume_source_id' => $signal->id,
+            'liveness_state' => 'repair_needed',
+            'liveness_reason' => 'Accepted signal name-provided is open without an open workflow task.',
+        ]);
+
+        return $run;
+    }
+
+    private function createWaitingRun(string $instanceId): WorkflowRun
     {
         $instance = WorkflowInstance::query()->create([
             'id' => $instanceId,
@@ -429,6 +573,16 @@ final class StorageConnectionTransactionBoundaryTest extends SchemaTestCase
         $instance->forceFill([
             'current_run_id' => $run->id,
         ])->save();
+
+        return $run;
+    }
+
+    /**
+     * @param array<string, mixed> $attributes
+     */
+    private function createWorkflowTask(string $instanceId, array $attributes = []): WorkflowTask
+    {
+        $run = $this->createWaitingRun($instanceId);
 
         /** @var WorkflowTask $task */
         $task = WorkflowTask::query()->create(array_merge([
