@@ -164,6 +164,57 @@ final class StorageConnectionTransactionBoundaryTest extends SchemaTestCase
         $this->assertNotNull($kept->fresh()->last_dispatched_at);
     }
 
+    public function testDispatchWaitsForTheApplicationsDefaultConnectionTransactionToCommit(): void
+    {
+        Queue::fake();
+
+        $task = $this->createWorkflowTask('storage-boundary-app-commit');
+
+        DB::transaction(function () use ($task): void {
+            StorageConnection::transaction(static function () use ($task): void {
+                TaskDispatcher::dispatch($task);
+            });
+
+            $this->assertSame(0, StorageConnection::transactionLevel());
+            Queue::assertNothingPushed();
+        });
+
+        Queue::assertPushed(RunWorkflowTask::class, 1);
+        Queue::assertPushed(
+            RunWorkflowTask::class,
+            static fn (RunWorkflowTask $job): bool => $job->taskId === $task->id
+        );
+        $this->assertNotNull($task->fresh()->last_dispatched_at);
+    }
+
+    public function testDispatchIsDroppedWhenTheApplicationsDefaultConnectionTransactionRollsBack(): void
+    {
+        Queue::fake();
+
+        $insideStorage = $this->createWorkflowTask('storage-boundary-app-rollback-nested');
+        $outsideStorage = $this->createWorkflowTask('storage-boundary-app-rollback-direct');
+
+        try {
+            DB::transaction(static function () use ($insideStorage, $outsideStorage): void {
+                StorageConnection::transaction(static function () use ($insideStorage): void {
+                    TaskDispatcher::dispatch($insideStorage);
+                });
+                TaskDispatcher::dispatch($outsideStorage);
+
+                Queue::assertNothingPushed();
+
+                throw new RuntimeException('application rolls back');
+            });
+            $this->fail('The application transaction should have thrown.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('application rolls back', $exception->getMessage());
+        }
+
+        Queue::assertNothingPushed();
+        $this->assertNull($insideStorage->fresh()->last_dispatched_at);
+        $this->assertNull($outsideStorage->fresh()->last_dispatched_at);
+    }
+
     public function testUnknownStorageConnectionFailsLoudlyInsteadOfFallingBackToTheDefault(): void
     {
         config()
