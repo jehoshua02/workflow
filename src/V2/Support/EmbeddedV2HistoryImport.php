@@ -903,7 +903,9 @@ final class EmbeddedV2HistoryImport
         $warnings = [];
         $runStatus = is_string($workflow['status'] ?? null) ? RunStatus::tryFrom($workflow['status']) : null;
 
-        if (! Schema::hasColumn('workflow_runs', 'import_source')) {
+        $runModel = new WorkflowRun();
+
+        if (! Schema::connection($runModel->getConnectionName())->hasColumn($runModel->getTable(), 'import_source')) {
             self::addFinding(
                 $errors,
                 'target.import_markers_missing',

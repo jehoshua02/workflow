@@ -41,6 +41,7 @@ use Workflow\V2\Models\WorkflowRun;
 use Workflow\V2\Models\WorkflowRunSummary;
 use Workflow\V2\Models\WorkflowSignal;
 use Workflow\V2\Models\WorkflowTask;
+use Workflow\V2\Support\EmbeddedV2HistoryImport;
 use Workflow\V2\Support\MessageService;
 use Workflow\V2\Support\ScheduleManager;
 use Workflow\V2\Support\StorageConnection;
@@ -426,6 +427,19 @@ final class StorageConnectionTransactionBoundaryTest extends SchemaTestCase
         Queue::assertNothingPushed();
         $this->assertNull($insideStorage->fresh()->last_dispatched_at);
         $this->assertNull($outsideStorage->fresh()->last_dispatched_at);
+    }
+
+    public function testHistoryImportChecksItsMarkerColumnsOnTheStorageConnection(): void
+    {
+        $report = EmbeddedV2HistoryImport::import([], [
+            'dry_run' => true,
+        ]);
+
+        $this->assertSame('rejected', $report['status']);
+        $this->assertNotContains(
+            'target.import_markers_missing',
+            array_column($report['eligibility']['errors'], 'rule'),
+        );
     }
 
     public function testUnknownStorageConnectionFailsLoudlyInsteadOfFallingBackToTheDefault(): void

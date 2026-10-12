@@ -16,6 +16,12 @@ use Illuminate\Support\Facades\DB;
  * Transactions that read or lock engine rows must open here. A transaction on
  * the default connection does not cover queries the models send to a separate
  * storage connection, so `lockForUpdate()` inside it holds no lock.
+ *
+ * Only `workflows.storage.connection` selects this connection. A configured
+ * model that sets its own `$connection` is not consulted: a transaction
+ * covers one connection, and the engine locks rows across many models, so
+ * one engine-wide setting is the only consistent answer. Apps that keep the
+ * engine's tables off the default connection must set the config key.
  */
 final class StorageConnection
 {
