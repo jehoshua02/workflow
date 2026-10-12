@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Add `Activity::concurrencyKey(): ?ConcurrencyKey` so an activity can hold a
+  shared cache lock while it runs. `ActivityTaskClaimer` takes the lock before
+  the claim, so queue, poll-mode and external workers all honor it. A held key
+  defers the task without spending an attempt. The task stays ready, waits
+  `releaseAfter` seconds, and records `ActivityDeferred` and
+  `ActivityDeferralEnded` once per wait. Past `maxWait`, one attempt fails with
+  `ConcurrencyKeyBusyException` and the retry policy applies. The lock must
+  expire, no sooner than the activity's start-to-close timeout. Deferred tasks
+  are counted as `tasks.deferred`, not as unhealthy, and repair leaves them
+  alone until `maxWait` passes. Adds a migration for the deferral columns on
+  `workflow_tasks` and the lock owner on `activity_attempts`.
 - Check for the engine's tables on the configured `workflows.storage.connection`
   instead of the application's default connection when gating the V2 task
   watchdog, worker-compatibility heartbeats, and the v1 watchdog. With a

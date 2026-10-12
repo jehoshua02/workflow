@@ -63,6 +63,19 @@ final class RunActivityTask implements ShouldQueue
             return;
         }
 
+        try {
+            $nextTask = $this->runClaimed($claim);
+        } finally {
+            $claim->releaseConcurrencyLock();
+        }
+
+        if ($nextTask instanceof WorkflowTask) {
+            TaskDispatcher::dispatch($nextTask);
+        }
+    }
+
+    private function runClaimed(ActivityTaskClaim $claim): ?WorkflowTask
+    {
         $attemptId = $claim->attemptId();
         $attemptCount = $claim->attemptNumber();
 
@@ -70,8 +83,12 @@ final class RunActivityTask implements ShouldQueue
         $execution = $claim->execution;
         $execution->setRelation('run', $claim->run);
 
-        $activityClass = TypeRegistry::resolveActivityClass($execution->activity_class, $execution->activity_type);
-        $activity = RuntimeObjectFactory::activity($activityClass, $execution, $execution->run, $this->taskId);
+        $activity = $claim->activity ?? RuntimeObjectFactory::activity(
+            TypeRegistry::resolveActivityClass($execution->activity_class, $execution->activity_type),
+            $execution,
+            $execution->run,
+            $this->taskId,
+        );
         $entryMethod = EntryMethod::forActivity($activity);
         $arguments = $activity->resolveMethodDependencies($execution->activityArguments(), $entryMethod);
         $activityArguments = $execution->activityArguments();
@@ -119,11 +136,7 @@ final class RunActivityTask implements ShouldQueue
             $backoffSeconds,
         );
 
-        $nextTask = $outcome['next_task'];
-
-        if ($nextTask instanceof WorkflowTask) {
-            TaskDispatcher::dispatch($nextTask);
-        }
+        return $outcome['next_task'];
     }
 
     /**

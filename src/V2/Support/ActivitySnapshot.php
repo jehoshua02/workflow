@@ -190,6 +190,8 @@ final class ActivitySnapshot
             HistoryEventType::ActivityScheduled => 'pending',
             HistoryEventType::ActivityStarted => 'running',
             HistoryEventType::ActivityHeartbeatRecorded => 'running',
+            HistoryEventType::ActivityDeferred,
+            HistoryEventType::ActivityDeferralEnded => 'pending',
             HistoryEventType::ActivityRetryScheduled => 'pending',
             HistoryEventType::ActivityCompleted => 'completed',
             HistoryEventType::ActivityFailed => 'failed',

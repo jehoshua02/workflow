@@ -1961,6 +1961,8 @@ final class QueryStateReplayer
             HistoryEventType::ActivityScheduled->value,
             HistoryEventType::ActivityStarted->value,
             HistoryEventType::ActivityHeartbeatRecorded->value,
+            HistoryEventType::ActivityDeferred->value,
+            HistoryEventType::ActivityDeferralEnded->value,
             HistoryEventType::ActivityRetryScheduled->value,
             HistoryEventType::ActivityCompleted->value,
             HistoryEventType::ActivityFailed->value,

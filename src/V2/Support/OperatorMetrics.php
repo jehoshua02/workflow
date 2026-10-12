@@ -115,6 +115,7 @@ final class OperatorMetrics
             'ready_due' => self::readyDueTasks($now, $namespace),
             'delayed' => self::delayedTasks($now, $namespace),
             'leased' => self::leasedTasks($namespace),
+            'deferred' => self::deferredTasks($namespace),
             'dispatch_failed' => self::dispatchFailedTasks($namespace),
             'claim_failed' => self::claimFailedTasks($namespace),
             'dispatch_overdue' => self::dispatchOverdueTasks($now, $namespace),
@@ -163,6 +164,7 @@ final class OperatorMetrics
             'runnable_tasks' => self::readyDueTasks($now, $namespace),
             'delayed_tasks' => self::delayedTasks($now, $namespace),
             'leased_tasks' => self::leasedTasks($namespace),
+            'deferred_tasks' => self::deferredTasks($namespace),
             'tasks_added_last_minute' => self::tasksAddedLastMinute($now, $namespace),
             'tasks_dispatched_last_minute' => self::tasksDispatchedLastMinute($now, $namespace),
             'retrying_activities' => self::retryingActivities($namespace),
@@ -1366,6 +1368,18 @@ final class OperatorMetrics
         return $task->available_at ?? $task->created_at;
     }
 
+    /**
+     * Ready activity tasks waiting on a concurrency key. Healthy by design, so
+     * they are counted here and never in the unhealthy totals.
+     */
+    private static function deferredTasks(?string $namespace): int
+    {
+        return self::scopedRunModelQuery(self::taskModel(), $namespace)
+            ->where('status', TaskStatus::Ready->value)
+            ->whereNotNull('deferred_since')
+            ->count();
+    }
+
     private static function dispatchFailedTasks(?string $namespace): int
     {
         return self::dispatchFailedQuery($namespace)->count();
@@ -1509,6 +1523,9 @@ final class OperatorMetrics
             })
             ->where(static function ($query): void {
                 self::applyClaimHealthy($query);
+            })
+            ->where(static function ($query) use ($now): void {
+                ActivityConcurrencyGate::applyNotWaiting($query, $now);
             })
             ->where(static function ($query) use ($cutoff): void {
                 $query->where(static function ($dispatched) use ($cutoff): void {
