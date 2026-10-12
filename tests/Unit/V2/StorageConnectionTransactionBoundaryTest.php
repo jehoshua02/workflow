@@ -18,6 +18,7 @@ use InvalidArgumentException;
 use RuntimeException;
 use Tests\Fixtures\V2\TestCommandTargetWorkflow;
 use Tests\Fixtures\V2\TestGreetingActivity;
+use Tests\Fixtures\V2\TestLocalActivityWorkflow;
 use Tests\Fixtures\V2\TestLocalDefaultConnectionWriteWorkflow;
 use Tests\Fixtures\V2\TestParentChildWorkflow;
 use Tests\Fixtures\V2\TestScheduledWorkflow;
@@ -27,7 +28,9 @@ use Tests\SchemaTestCase;
 use Workflow\Serializers\CodecRegistry;
 use Workflow\Serializers\Serializer;
 use Workflow\V2\Contracts\WorkflowTaskBridge;
+use Workflow\V2\Enums\ActivityStatus;
 use Workflow\V2\Enums\ChildCallStatus;
+use Workflow\V2\Enums\HistoryEventType;
 use Workflow\V2\Enums\MessageChannel;
 use Workflow\V2\Enums\RunStatus;
 use Workflow\V2\Enums\ScheduleOverlapPolicy;
@@ -46,8 +49,11 @@ use Workflow\V2\Models\WorkflowRun;
 use Workflow\V2\Models\WorkflowRunSummary;
 use Workflow\V2\Models\WorkflowSignal;
 use Workflow\V2\Models\WorkflowTask;
+use Workflow\V2\Support\ActivityTimeoutEnforcer;
 use Workflow\V2\Support\EmbeddedV2HistoryImport;
+use Workflow\V2\Support\LocalActivityExecutor;
 use Workflow\V2\Support\MessageService;
+use Workflow\V2\Support\PortableLocalActivityPreparation;
 use Workflow\V2\Support\ScheduleManager;
 use Workflow\V2\Support\StorageConnection;
 use Workflow\V2\Support\TaskDispatcher;
@@ -488,6 +494,114 @@ final class StorageConnectionTransactionBoundaryTest extends SchemaTestCase
         }
     }
 
+    public function testLocalActivityExecutionOpensNoTransactionOnTheDefaultConnection(): void
+    {
+        WorkflowStub::fake();
+        $workflow = WorkflowStub::make(TestLocalActivityWorkflow::class, 'storage-boundary-local-execute');
+        $workflow->start('Taylor');
+        WorkflowStub::runReadyTasks();
+
+        $this->assertTrue(WorkflowStub::load('storage-boundary-local-execute')->completed());
+        $this->assertSame(
+            ActivityStatus::Completed,
+            ActivityExecution::query()->where('workflow_run_id', $workflow->runId())->sole()->status,
+        );
+        $this->assertStorageTransactionsOnly();
+    }
+
+    public function testPortableLocalActivityOutcomeOpensNoTransactionOnTheDefaultConnection(): void
+    {
+        Queue::fake();
+        config()
+            ->set('workflows.v2.compatibility.current', 'build-a');
+        config()
+            ->set('workflows.v2.compatibility.supported', ['build-a']);
+
+        $run = $this->createWaitingRun('storage-boundary-local-portable');
+        $run->forceFill([
+            'payload_codec' => 'avro',
+            'arguments' => Serializer::serializeWithCodec('avro', ['Taylor']),
+            'compatibility' => 'build-a',
+        ])->save();
+        $task = $this->createWorkflowTaskFor($run, [
+            'status' => TaskStatus::Leased->value,
+            'attempt_count' => 2,
+            'compatibility' => 'build-a',
+            'lease_owner' => 'portable-worker',
+            'lease_expires_at' => now()
+                ->addMinutes(5),
+        ]);
+        $prepared = PortableLocalActivityPreparation::prepare($task->id, 'portable-worker', 2, 1, 'sdk-local-attempt', [
+            'type' => 'record_local_activity',
+            'activity_type' => 'python-local-opaque',
+            'arguments' => Serializer::serializeWithCodec('avro', ['Taylor']),
+            'payload_codec' => 'avro',
+        ], '1.20');
+        $this->assertTrue($prepared['prepared'], json_encode($prepared, JSON_THROW_ON_ERROR));
+        $this->began = [];
+
+        $reply = $this->app->make(LocalActivityExecutor::class)
+            ->recordPortableOutcome($prepared['activity_attempt_id'], 'portable-worker', 2, [
+                'outcome' => 'completed',
+                'result' => Serializer::serializeWithCodec('avro', [
+                    'value' => 'Hello, Taylor!',
+                ]),
+                'payload_codec' => 'avro',
+            ], '1.20');
+
+        $this->assertTrue($reply['recorded'], json_encode($reply, JSON_THROW_ON_ERROR));
+        $this->assertSame(
+            ActivityStatus::Completed,
+            ActivityExecution::query()->findOrFail($prepared['activity_execution_id'])->status,
+        );
+        $this->assertStorageTransactionsOnly();
+    }
+
+    public function testActivityTimeoutEnforcementOpensNoTransactionOnTheDefaultConnection(): void
+    {
+        Queue::fake();
+
+        $run = $this->createWaitingRun('storage-boundary-activity-timeout');
+        $execution = ActivityExecution::query()->create([
+            'workflow_run_id' => $run->id,
+            'sequence' => 1,
+            'activity_class' => TestGreetingActivity::class,
+            'activity_type' => 'test-greeting-activity',
+            'status' => ActivityStatus::Pending->value,
+            'attempt_count' => 0,
+            'arguments' => Serializer::serialize(['Taylor']),
+            'schedule_deadline_at' => now()
+                ->subMinute(),
+            'retry_policy' => [
+                'snapshot_version' => 1,
+                'max_attempts' => 1,
+                'backoff_seconds' => [],
+                'start_to_close_timeout' => null,
+                'schedule_to_start_timeout' => null,
+            ],
+        ]);
+        $activityTask = $this->createWorkflowTaskFor($run, [
+            'task_type' => TaskType::Activity->value,
+            'payload' => [
+                'activity_execution_id' => $execution->id,
+            ],
+        ]);
+        WorkflowHistoryEvent::record($run, HistoryEventType::ActivityScheduled, [
+            'activity_execution_id' => $execution->id,
+            'activity_class' => $execution->activity_class,
+            'activity_type' => $execution->activity_type,
+            'sequence' => 1,
+        ]);
+        $this->began = [];
+
+        $result = ActivityTimeoutEnforcer::enforce($execution->id);
+
+        $this->assertTrue($result['enforced'], json_encode($result, JSON_THROW_ON_ERROR));
+        $this->assertSame(ActivityStatus::Failed, $execution->fresh()->status);
+        $this->assertSame(TaskStatus::Cancelled, $activityTask->fresh()->status);
+        $this->assertStorageTransactionsOnly();
+    }
+
     public function testUnknownStorageConnectionFailsLoudlyInsteadOfFallingBackToTheDefault(): void
     {
         config()
@@ -642,8 +756,14 @@ final class StorageConnectionTransactionBoundaryTest extends SchemaTestCase
      */
     private function createWorkflowTask(string $instanceId, array $attributes = []): WorkflowTask
     {
-        $run = $this->createWaitingRun($instanceId);
+        return $this->createWorkflowTaskFor($this->createWaitingRun($instanceId), $attributes);
+    }
 
+    /**
+     * @param array<string, mixed> $attributes
+     */
+    private function createWorkflowTaskFor(WorkflowRun $run, array $attributes = []): WorkflowTask
+    {
         /** @var WorkflowTask $task */
         $task = WorkflowTask::query()->create(array_merge([
             'workflow_run_id' => $run->id,
