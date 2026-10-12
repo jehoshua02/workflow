@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\V2;
 
+use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -97,6 +98,10 @@ final class V2EmbeddedReplayRegressionCorpusTest extends TestCase
                 $this->assertPortableLocalActivityFailureUsesAvro($fixture);
             }
 
+            if (($fixture['id'] ?? null) === 'storage-connection-workflow-task-transactions') {
+                $this->assertWorkflowTaskTransactionsUseTheStorageConnection($fixture);
+            }
+
             $consumers = $fixture['consumers'] ?? ['workflow-fiber-runner'];
             if (in_array('embedded-history-import', $consumers, true)) {
                 $this->assertHistoryImportMetadataRoundTrips($fixture);
@@ -172,6 +177,57 @@ final class V2EmbeddedReplayRegressionCorpusTest extends TestCase
             $fixture['expected_condition_wait_occurrence_ids'],
             array_column(ConditionWaits::forRun($run->fresh(['historyEvents'])), 'condition_wait_occurrence_id'),
         );
+    }
+
+    /**
+     * With a separate storage connection, the workflow task must open its
+     * transactions there, or its row locks hold nothing.
+     *
+     * @param array<string, mixed> $fixture
+     */
+    private function assertWorkflowTaskTransactionsUseTheStorageConnection(array $fixture): void
+    {
+        $this->clearWorkflowState();
+
+        $default = (string) config('database.default');
+        $storage = 'regression_corpus_storage';
+        config([
+            "database.connections.{$storage}" => config("database.connections.{$default}"),
+            'workflows.storage.connection' => $storage,
+        ]);
+        $began = [];
+        $this->app['events']->listen(
+            TransactionBeginning::class,
+            static function (TransactionBeginning $event) use (&$began): void {
+                $began[] = $event->connectionName;
+            },
+        );
+
+        try {
+            $stub = WorkflowStub::make(
+                $fixture['workflow']['type'],
+                sprintf('regression-corpus-storage-%d', ++$this->workflowNumber),
+            );
+            $stub->start(...$fixture['workflow']['arguments']);
+            $began = [];
+
+            /** @var WorkflowRun $run */
+            $run = WorkflowRun::query()->findOrFail($stub->runId());
+            $this->runReadyWorkflowTask($run);
+
+            $this->assertSame(1, ActivityExecution::query()->where('workflow_run_id', $run->id)->count());
+            $this->assertNotSame([], $began, "{$fixture['id']} opened no transaction.");
+            $this->assertSame(
+                [$storage],
+                array_values(array_unique($began)),
+                "{$fixture['id']} opened a workflow-task transaction outside the storage connection.",
+            );
+        } finally {
+            config([
+                'workflows.storage.connection' => null,
+            ]);
+            DB::purge($storage);
+        }
     }
 
     /**
