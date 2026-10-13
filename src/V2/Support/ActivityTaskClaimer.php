@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Workflow\V2\Support;
 
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Workflow\V2\Contracts\HistoryProjectionRole;
 use Workflow\V2\Enums\ActivityAttemptStatus;
@@ -45,7 +44,11 @@ final class ActivityTaskClaimer
         ?string $leaseOwner = null,
         bool $releaseFutureTasks = false,
     ): array {
-        return DB::transaction(static function () use ($taskId, $leaseOwner, $releaseFutureTasks): array {
+        return StorageConnection::claimTransaction(static function () use (
+            $taskId,
+            $leaseOwner,
+            $releaseFutureTasks
+        ): array {
             /** @var WorkflowTask|null $task */
             $task = WorkflowTask::query()
                 ->lockForUpdate()
@@ -178,7 +181,7 @@ final class ActivityTaskClaimer
             self::historyProjectionRole()->recordActivityStarted($run, $execution, $attempt, $task);
 
             return self::claimSuccess(new ActivityTaskClaim($task, $run, $execution, $attempt));
-        });
+        }, static fn (): array => self::claimFailure('task_locked'));
     }
 
     /**

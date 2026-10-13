@@ -8,7 +8,6 @@ use Cron\CronExpression;
 use DateTimeInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Support\Facades\DB;
 use LogicException;
 use PDOException;
 use Throwable;
@@ -314,7 +313,7 @@ final class ScheduleManager
 
     public static function delete(WorkflowSchedule $schedule, ?CommandContext $context = null): WorkflowSchedule
     {
-        DB::transaction(static function () use ($schedule, $context): void {
+        StorageConnection::transaction(static function () use ($schedule, $context): void {
             /** @var WorkflowSchedule $locked */
             $locked = WorkflowSchedule::query()
                 ->lockForUpdate()
@@ -360,7 +359,7 @@ final class ScheduleManager
         ?CommandContext $context = null,
         ?DateTimeInterface $occurrenceTime = null,
     ): ScheduleTriggerResult {
-        return DB::transaction(static function () use (
+        return StorageConnection::transaction(static function () use (
             $schedule,
             $overlapPolicyOverride,
             $context,
@@ -474,7 +473,7 @@ final class ScheduleManager
             }
 
             try {
-                $drained = DB::transaction(static function () use ($schedule): ?array {
+                $drained = StorageConnection::transaction(static function () use ($schedule): ?array {
                     /** @var WorkflowSchedule $schedule */
                     $schedule = WorkflowSchedule::query()->lockForUpdate()->findOrFail($schedule->id);
 
@@ -788,7 +787,7 @@ final class ScheduleManager
             ? ScheduleOverlapPolicy::AllowAll
             : $overlapPolicy;
 
-        return DB::transaction(static function () use (
+        return StorageConnection::transaction(static function () use (
             $schedule,
             $effectivePolicy,
             $occurrenceTime,

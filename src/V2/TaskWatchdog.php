@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Workflow\V2;
 
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Throwable;
 use Workflow\V2\Contracts\HistoryProjectionRole;
@@ -23,6 +22,7 @@ use Workflow\V2\Support\ActivityTimeoutEnforcer;
 use Workflow\V2\Support\ConfiguredV2Models;
 use Workflow\V2\Support\RequestedTaskScope;
 use Workflow\V2\Support\ServiceCallDeadline;
+use Workflow\V2\Support\StorageConnection;
 use Workflow\V2\Support\TaskCompatibility;
 use Workflow\V2\Support\TaskDispatcher;
 use Workflow\V2\Support\TaskRepair;
@@ -256,7 +256,7 @@ final class TaskWatchdog
     private static function recoverExistingTask(string $candidateId): array
     {
         try {
-            $task = DB::transaction(static function () use ($candidateId): ?WorkflowTask {
+            $task = StorageConnection::transaction(static function () use ($candidateId): ?WorkflowTask {
                 $runId = WorkflowTask::query()->whereKey($candidateId)->value('workflow_run_id');
                 if (! is_string($runId)) {
                     return null;
@@ -339,7 +339,7 @@ final class TaskWatchdog
     private static function recoverMissingTask(string $runId): array
     {
         try {
-            $task = DB::transaction(static function () use ($runId): ?WorkflowTask {
+            $task = StorageConnection::transaction(static function () use ($runId): ?WorkflowTask {
                 /** @var WorkflowRun $run */
                 $run = WorkflowRun::query()
                     ->with(['instance', 'tasks', 'activityExecutions', 'timers', 'failures', 'historyEvents'])
@@ -529,7 +529,10 @@ final class TaskWatchdog
         $cancellationEnforced = false;
 
         try {
-            $task = DB::transaction(static function () use ($runId, &$cancellationEnforced): ?WorkflowTask {
+            $task = StorageConnection::transaction(static function () use (
+                $runId,
+                &$cancellationEnforced
+            ): ?WorkflowTask {
                 $cancellationEnforced = false;
 
                 /** @var WorkflowRun|null $run */

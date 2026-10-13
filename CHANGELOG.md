@@ -14,12 +14,39 @@
 
 ## Unreleased
 
+- Open the V2 engine's database transactions on the configured
+  `workflows.storage.connection` instead of the application's default
+  connection. With a dedicated storage connection, every `lockForUpdate()`
+  ran outside a transaction and released its row lock at once, so two workers
+  could claim the same activity task. Behavior on the default connection is
+  unchanged. Apps that set `workflows.storage.connection` to another
+  connection should note three behavior changes:
+  - Engine writes are now atomic. History, summary, task and execution writes
+    that used to autocommit one by one now commit or roll back together.
+  - App writes on other connections no longer roll back with an engine
+    failure when they run inside an engine transaction. That code is workflow
+    code during replay, local activity bodies, and synchronous lifecycle-event
+    listeners. Regular activities are unaffected: `RunActivityTask` claims the
+    task, runs the activity body outside any transaction, then records the
+    outcome.
+  - Post-commit task dispatch waits for the storage transaction to commit,
+    and also for an open default-connection transaction, so a workflow started
+    or signalled inside the app's own transaction is not dispatched before
+    that transaction commits. If it rolls back, the engine rows stay committed
+    and the task-repair pass dispatches the task after
+    `workflows.v2.task_repair.redispatch_after_seconds`. The rollback delays
+    the start; it does not cancel it.
 - Check for the engine's tables on the configured `workflows.storage.connection`
   instead of the application's default connection when gating the V2 task
   watchdog, worker-compatibility heartbeats, and the v1 watchdog. With a
   dedicated storage connection those gates were always false, so expired
   leases were never repaired and activity timeouts never enforced. Behaviour
   on the default connection is unchanged.
+- Return a `task_locked` claim failure when a claim times out or deadlocks
+  waiting for a task's row lock, instead of failing the queue job. The claim
+  must open the outermost storage transaction; inside an open one the error
+  still propagates. Worker-facing claim responses report it as
+  `task_not_claimable` with `reason_detail` `task_locked`.
 
 ## 2.5.7 - 2026-10-10
 
